@@ -27,11 +27,52 @@ class ActivationFunctions:
     def linear_derivative(x):
         return np.ones_like(x)
 
-# --- Katman Sınıfı ---
+# --- Kayıp Fonksiyonları (Loss Functions) ---
+class Loss:
+    """Kayıp fonksiyonları için temel sınıf."""
+    def loss(self, y_true, y_pred):
+        raise NotImplementedError
+
+    def derivative(self, y_true, y_pred):
+        raise NotImplementedError
+
+class MSE(Loss):
+    """Ortalama Kare Hatası (Mean Squared Error) kaybı."""
+    def loss(self, y_true, y_pred):
+        return np.mean(np.square(y_true - y_pred))
+
+    def derivative(self, y_true, y_pred):
+        return 2 * (y_pred - y_true) / y_true.size
+
+class BinaryCrossEntropy(Loss):
+    """İkili Çapraz Entropi (Binary Cross-Entropy) kaybı."""
+    def loss(self, y_true, y_pred):
+        # log(0) hatasını önlemek için tahminleri kırp
+        y_pred = np.clip(y_pred, 1e-15, 1 - 1e-15)
+        return -np.mean(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred))
+
+    def derivative(self, y_true, y_pred):
+        y_pred = np.clip(y_pred, 1e-15, 1 - 1e-15)
+        return (y_pred - y_true) / (y_pred * (1 - y_pred))
+
+# --- Optimize Edici Sınıfı (Optimizer Class) ---
+class SGD:
+    """Stokastik Gradyan İnişi (Stochastic Gradient Descent) optimize edicisi."""
+    def __init__(self, learning_rate=0.01):
+        self.learning_rate = learning_rate
+
+    def update(self, layer):
+        """Katmanın ağırlıklarını ve bias'larını güncelle."""
+        layer.weights -= self.learning_rate * layer.delta_weights
+        layer.bias -= self.learning_rate * layer.delta_bias
+
+# --- Katman Sınıfı (Layer Class) ---
 class Layer:
     def __init__(self, input_size, output_size, activation_name="sigmoid"):
-        self.weights = np.random.randn(input_size, output_size) * 0.01 # Ağırlıkları küçük rastgele değerlerle başlat
-        self.bias = np.zeros((1, output_size)) # Bias'ları sıfırla başlat
+        # He ve Xavier/Glorot başlatma yöntemleri daha iyi sonuçlar verebilir
+        # ancak şimdilik basitliği koruyoruz.
+        self.weights = np.random.randn(input_size, output_size) * 0.01
+        self.bias = np.zeros((1, output_size))
 
         self.activation_name = activation_name
         if activation_name == "sigmoid":
@@ -46,7 +87,6 @@ class Layer:
         else:
             raise ValueError("Desteklenmeyen aktivasyon fonksiyonu.")
 
-        # Geri yayılım için gerekli değerleri saklamak
         self.input = None
         self.output = None
         self.activated_output = None
@@ -59,31 +99,30 @@ class Layer:
         self.activated_output = self.activation_func(self.output)
         return self.activated_output
 
-    def backward(self, output_error, learning_rate):
-        # Aktivasyon fonksiyonunun türevini uygula
+    def backward(self, output_error):
+        # Bu metod artık ağırlıkları GÜNCELLEMİYOR, sadece gradyanları HESAPLIYOR.
         activated_error = output_error * self.activation_derivative_func(self.output)
 
-        # Ağırlık ve bias gradyanlarını hesapla
         self.delta_weights = np.dot(self.input.T, activated_error)
         self.delta_bias = np.sum(activated_error, axis=0, keepdims=True)
 
-        # Bir sonraki katmana iletmek için giriş hatasını hesapla
         input_error = np.dot(activated_error, self.weights.T)
-
-        # Ağırlık ve bias'ları güncelle
-        self.weights -= learning_rate * self.delta_weights
-        self.bias -= learning_rate * self.delta_bias
-
         return input_error
 
-# --- Ağ Sınıfı ---
+# --- Ağ Sınıfı (Network Class) ---
 class NeuralNetwork:
-    def __init__(self, learning_rate=0.01):
+    def __init__(self):
         self.layers = []
-        self.learning_rate = learning_rate
+        self.loss_func = None
+        self.optimizer = None
 
     def add_layer(self, input_size, output_size, activation_name="sigmoid"):
         self.layers.append(Layer(input_size, output_size, activation_name))
+        
+    def compile(self, optimizer, loss):
+        """Ağın eğitim için yapılandırılması (Keras'tan esinlenilmiştir)."""
+        self.optimizer = optimizer
+        self.loss_func = loss
 
     def forward(self, input_data):
         output = input_data
@@ -91,21 +130,33 @@ class NeuralNetwork:
             output = layer.forward(output)
         return output
 
-    def backward(self, target, predictions):
-        # Kayıp fonksiyonunun türevi (Basit MSE için)
-        error = predictions - target # Bu, kayıp fonksiyonuna göre değişecektir
+    def backward(self, y_true, y_pred):
+        # Geri yayılımı kayıp fonksiyonunun türeviyle başlat
+        error = self.loss_func.derivative(y_true, y_pred)
         
-        # Katmanları tersten dolaşarak geri yayılımı yap
         for layer in reversed(self.layers):
-            error = layer.backward(error, self.learning_rate)
+            error = layer.backward(error)
 
     def train(self, X_train, y_train, epochs):
+        if self.optimizer is None or self.loss_func is None:
+            raise ValueError("Ağ kullanılmadan önce 'compile' edilmelidir.")
+            
         for epoch in range(epochs):
+            # 1. İleri Yayılım (Forward Pass)
             predictions = self.forward(X_train)
-            loss = np.mean(np.square(y_train - predictions)) # MSE kaybı
+            
+            # 2. Kaybı Hesapla (Calculate Loss)
+            loss = self.loss_func.loss(y_train, predictions)
+            
+            # 3. Geri Yayılım (Backward Pass - Gradyanları Hesapla)
             self.backward(y_train, predictions)
-            if epoch % 100 == 0:
-                print(f"Epoch {epoch}, Loss: {loss:.4f}")
+            
+            # 4. Ağırlıkları Güncelle (Update Weights)
+            for layer in self.layers:
+                self.optimizer.update(layer)
+
+            if epoch % 500 == 0:
+                print(f"Epoch {epoch}, Loss: {loss:.5f}")
 
 # --- Kullanım Örneği ---
 if __name__ == "__main__":
@@ -113,14 +164,17 @@ if __name__ == "__main__":
     X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
     y = np.array([[0], [1], [1], [0]]) # XOR çıktısı
 
-    # Ağ oluşturma
-    nn = NeuralNetwork(learning_rate=0.1)
+    # Ağ oluşturma 
+    nn = NeuralNetwork()
 
     # Katmanları ekleme
-    # Giriş katmanı (2 giriş nöronu), gizli katman (4 nöron, ReLU aktivasyonu)
     nn.add_layer(input_size=2, output_size=4, activation_name="relu")
-    # Çıkış katmanı (1 nöron, sigmoid aktivasyonu)
     nn.add_layer(input_size=4, output_size=1, activation_name="sigmoid")
+
+    # YENİ ADIM: Modeli derleme
+    # Sınıflandırma için BinaryCrossEntropy daha iyi bir seçimdir.
+    # Öğrenme oranı artık Optimizer içinde belirtiliyor.
+    nn.compile(optimizer=SGD(learning_rate=0.1), loss=BinaryCrossEntropy())
 
     # Modeli eğitme
     print("Eğitim başlıyor...")
@@ -130,6 +184,5 @@ if __name__ == "__main__":
     # Tahmin yapma
     print("\nTahminler:")
     predictions = nn.forward(X)
-    print(np.round(predictions)) # Yuvarlanmış tahminler
-    print("\nGerçek Değerler:")
-    print(y)
+    for i in range(len(X)):
+        print(f"Giriş: {X[i]}, Tahmin: {predictions[i][0]:.4f} -> {np.round(predictions[i][0])}, Gerçek: {y[i][0]}")
