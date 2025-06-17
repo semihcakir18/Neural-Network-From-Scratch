@@ -1,7 +1,12 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
-# --- Aktivasyon Fonksiyonları ---
+# ---------------------------------------------------------------------------
+# Core Components
+# ---------------------------------------------------------------------------
+
 class ActivationFunctions:
+    """A collection of static methods for activation functions and their derivatives."""
     @staticmethod
     def sigmoid(x):
         return 1 / (1 + np.exp(-x))
@@ -27,9 +32,8 @@ class ActivationFunctions:
     def linear_derivative(x):
         return np.ones_like(x)
 
-# --- Kayıp Fonksiyonları (Loss Functions) ---
 class Loss:
-    """Kayıp fonksiyonları için temel sınıf."""
+    """Base class for all loss functions."""
     def loss(self, y_true, y_pred):
         raise NotImplementedError
 
@@ -37,7 +41,7 @@ class Loss:
         raise NotImplementedError
 
 class MSE(Loss):
-    """Ortalama Kare Hatası (Mean Squared Error) kaybı."""
+    """Mean Squared Error loss function."""
     def loss(self, y_true, y_pred):
         return np.mean(np.square(y_true - y_pred))
 
@@ -45,9 +49,9 @@ class MSE(Loss):
         return 2 * (y_pred - y_true) / y_true.size
 
 class BinaryCrossEntropy(Loss):
-    """İkili Çapraz Entropi (Binary Cross-Entropy) kaybı."""
+    """Binary Cross-Entropy loss function, suitable for binary classification."""
     def loss(self, y_true, y_pred):
-        # log(0) hatasını önlemek için tahminleri kırp
+        # Clip predictions to prevent log(0) errors.
         y_pred = np.clip(y_pred, 1e-15, 1 - 1e-15)
         return -np.mean(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred))
 
@@ -55,134 +59,194 @@ class BinaryCrossEntropy(Loss):
         y_pred = np.clip(y_pred, 1e-15, 1 - 1e-15)
         return (y_pred - y_true) / (y_pred * (1 - y_pred))
 
-# --- Optimize Edici Sınıfı (Optimizer Class) ---
 class SGD:
-    """Stokastik Gradyan İnişi (Stochastic Gradient Descent) optimize edicisi."""
+    """Stochastic Gradient Descent optimizer."""
     def __init__(self, learning_rate=0.01):
         self.learning_rate = learning_rate
 
     def update(self, layer):
-        """Katmanın ağırlıklarını ve bias'larını güncelle."""
+        """Updates the layer's weights and biases using the calculated gradients."""
         layer.weights -= self.learning_rate * layer.delta_weights
         layer.bias -= self.learning_rate * layer.delta_bias
 
-# --- Katman Sınıfı (Layer Class) ---
+# ---------------------------------------------------------------------------
+# Network Architecture
+# ---------------------------------------------------------------------------
+
 class Layer:
+    """Represents a single dense layer in the neural network."""
     def __init__(self, input_size, output_size, activation_name="sigmoid"):
-        # He ve Xavier/Glorot başlatma yöntemleri daha iyi sonuçlar verebilir
-        # ancak şimdilik basitliği koruyoruz.
+        """Initializes the layer's weights, biases, and activation function."""
         self.weights = np.random.randn(input_size, output_size) * 0.01
         self.bias = np.zeros((1, output_size))
-
+        
+        # Store activation function details
         self.activation_name = activation_name
-        if activation_name == "sigmoid":
-            self.activation_func = ActivationFunctions.sigmoid
-            self.activation_derivative_func = ActivationFunctions.sigmoid_derivative
-        elif activation_name == "relu":
-            self.activation_func = ActivationFunctions.relu
-            self.activation_derivative_func = ActivationFunctions.relu_derivative
-        elif activation_name == "linear":
-            self.activation_func = ActivationFunctions.linear
-            self.activation_derivative_func = ActivationFunctions.linear_derivative
-        else:
-            raise ValueError("Desteklenmeyen aktivasyon fonksiyonu.")
-
+        activations = {
+            "sigmoid": (ActivationFunctions.sigmoid, ActivationFunctions.sigmoid_derivative),
+            "relu": (ActivationFunctions.relu, ActivationFunctions.relu_derivative),
+            "linear": (ActivationFunctions.linear, ActivationFunctions.linear_derivative)
+        }
+        if activation_name not in activations:
+            raise ValueError(f"Unsupported activation function: {activation_name}")
+        self.activation_func, self.activation_derivative_func = activations[activation_name]
+        
+        # Cache for backpropagation
         self.input = None
         self.output = None
-        self.activated_output = None
         self.delta_weights = None
         self.delta_bias = None
 
     def forward(self, input_data):
+        """Performs the forward pass through the layer."""
         self.input = input_data
         self.output = np.dot(input_data, self.weights) + self.bias
-        self.activated_output = self.activation_func(self.output)
-        return self.activated_output
-
+        return self.activation_func(self.output)
+    
     def backward(self, output_error):
-        # Bu metod artık ağırlıkları GÜNCELLEMİYOR, sadece gradyanları HESAPLIYOR.
+        """
+        Performs the backward pass.
+        Calculates weight/bias gradients and returns the input error for the previous layer.
+        """
         activated_error = output_error * self.activation_derivative_func(self.output)
-
         self.delta_weights = np.dot(self.input.T, activated_error)
         self.delta_bias = np.sum(activated_error, axis=0, keepdims=True)
-
         input_error = np.dot(activated_error, self.weights.T)
         return input_error
 
-# --- Ağ Sınıfı (Network Class) ---
 class NeuralNetwork:
+    """A fully-connected feedforward neural network."""
     def __init__(self):
+        """Initializes the network components."""
         self.layers = []
         self.loss_func = None
         self.optimizer = None
 
     def add_layer(self, input_size, output_size, activation_name="sigmoid"):
+        """Adds a new layer to the network."""
         self.layers.append(Layer(input_size, output_size, activation_name))
-        
+
     def compile(self, optimizer, loss):
-        """Ağın eğitim için yapılandırılması (Keras'tan esinlenilmiştir)."""
+        """Configures the model for training with a specified optimizer and loss function."""
         self.optimizer = optimizer
         self.loss_func = loss
 
     def forward(self, input_data):
+        """Propagates input data through all layers."""
         output = input_data
         for layer in self.layers:
             output = layer.forward(output)
         return output
-
+    
     def backward(self, y_true, y_pred):
-        # Geri yayılımı kayıp fonksiyonunun türeviyle başlat
+        """Initiates the backpropagation process starting from the loss derivative."""
         error = self.loss_func.derivative(y_true, y_pred)
-        
         for layer in reversed(self.layers):
             error = layer.backward(error)
 
-    def train(self, X_train, y_train, epochs):
+    @staticmethod
+    def calculate_accuracy(y_pred, y_true):
+        """Calculates classification accuracy for binary problems."""
+        predicted_labels = np.round(y_pred)
+        return np.mean(predicted_labels == y_true)
+
+    def train(self, X_train, y_train, X_val, y_val, epochs, verbose=True):
+        """
+        Trains the neural network for a fixed number of epochs.
+        
+        Returns:
+            A history dictionary containing training and validation loss and accuracy.
+        """
         if self.optimizer is None or self.loss_func is None:
-            raise ValueError("Ağ kullanılmadan önce 'compile' edilmelidir.")
-            
+            raise ValueError("Network must be compiled with an optimizer and loss function before training.")
+        
+        history = {'loss': [], 'accuracy': [], 'val_loss': [], 'val_accuracy': []}
+
         for epoch in range(epochs):
-            # 1. İleri Yayılım (Forward Pass)
-            predictions = self.forward(X_train)
+            # 1. Forward pass on training data
+            train_preds = self.forward(X_train)
             
-            # 2. Kaybı Hesapla (Calculate Loss)
-            loss = self.loss_func.loss(y_train, predictions)
+            # 2. Backward pass to calculate gradients
+            self.backward(y_train, train_preds)
             
-            # 3. Geri Yayılım (Backward Pass - Gradyanları Hesapla)
-            self.backward(y_train, predictions)
-            
-            # 4. Ağırlıkları Güncelle (Update Weights)
+            # 3. Update weights using the optimizer
             for layer in self.layers:
                 self.optimizer.update(layer)
 
-            if epoch % 500 == 0:
-                print(f"Epoch {epoch}, Loss: {loss:.5f}")
+            # 4. Calculate and store metrics for both training and validation sets
+            history['loss'].append(self.loss_func.loss(y_train, train_preds))
+            history['accuracy'].append(self.calculate_accuracy(train_preds, y_train))
+            
+            val_preds = self.forward(X_val)
+            history['val_loss'].append(self.loss_func.loss(y_val, val_preds))
+            history['val_accuracy'].append(self.calculate_accuracy(val_preds, y_val))
 
-# --- Kullanım Örneği ---
+            # 5. Print progress
+            if verbose and epoch % (epochs // 10) == 0:
+                print(f"Epoch {epoch}/{epochs} -> "
+                      f"Loss: {history['loss'][-1]:.4f}, Acc: {history['accuracy'][-1]:.4f} | "
+                      f"Val_Loss: {history['val_loss'][-1]:.4f}, Val_Acc: {history['val_accuracy'][-1]:.4f}")
+        
+        return history
+
+# ---------------------------------------------------------------------------
+# Visualization
+# ---------------------------------------------------------------------------
+
+def plot_history(history, title=''):
+    """
+    Plots training & validation metrics (loss & accuracy) on a single graph.
+    """
+    plt.style.use('ggplot')
+    plt.figure(figsize=(12, 8))
+
+    # Kayıp çizgileri
+    plt.plot(history['loss'], color='blue', linestyle='-', label='Eğitim Kaybı')
+    plt.plot(history['val_loss'], color='red', linestyle='-', label='Validasyon Kaybı')
+
+    # Doğruluk çizgileri
+    plt.plot(history['accuracy'], color='blue', linestyle='--', label='Eğitim Doğruluğu')
+    plt.plot(history['val_accuracy'], color='red', linestyle='--', label='Validasyon Doğruluğu')
+    
+    # Grafik başlıkları ve etiketler
+    plt.title(f'Eğitim Geçmişi: {title}', fontsize=16)
+    plt.xlabel('Epoch')
+    plt.ylabel('Değer (Loss ve Accuracy)')
+    
+    plt.legend()
+    plt.grid(True)
+    plt.ylim(bottom=0)
+    
+    plt.xlim(0, len(history['loss']) - 1)
+    
+    plt.tight_layout()
+    plt.show()
+
+# ---------------------------------------------------------------------------
+# Main Execution
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    # Basit XOR problemi için veri seti
-    X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
-    y = np.array([[0], [1], [1], [0]]) # XOR çıktısı
+    # 1. Prepare the dataset (XOR Problem)
+    # For this simple problem, we use the same data for training and validation.
+    X_data = np.array([[0,0], [0,1], [1,0], [1,1]])
+    y_data = np.array([[0], [1], [1], [0]])
 
-    # Ağ oluşturma 
+    # 2. Build the Neural Network
     nn = NeuralNetwork()
-
-    # Katmanları ekleme
-    nn.add_layer(input_size=2, output_size=4, activation_name="relu")
-    nn.add_layer(input_size=4, output_size=1, activation_name="sigmoid")
-
-    # YENİ ADIM: Modeli derleme
-    # Sınıflandırma için BinaryCrossEntropy daha iyi bir seçimdir.
-    # Öğrenme oranı artık Optimizer içinde belirtiliyor.
+    nn.add_layer(input_size=2, output_size=8, activation_name="relu")
+    nn.add_layer(input_size=8, output_size=8, activation_name="linear")
+    nn.add_layer(input_size=8, output_size=1, activation_name="sigmoid")
+    
+    # 3. Compile the model
     nn.compile(optimizer=SGD(learning_rate=0.1), loss=BinaryCrossEntropy())
 
-    # Modeli eğitme
+    # 4. Train the model
     print("Eğitim başlıyor...")
-    nn.train(X, y, epochs=5000)
+    training_history = nn.train(X_train=X_data, y_train=y_data, 
+                                X_val=X_data, y_val=y_data, 
+                                epochs=3000)
     print("Eğitim tamamlandı.")
 
-    # Tahmin yapma
-    print("\nTahminler:")
-    predictions = nn.forward(X)
-    for i in range(len(X)):
-        print(f"Giriş: {X[i]}, Tahmin: {predictions[i][0]:.4f} -> {np.round(predictions[i][0])}, Gerçek: {y[i][0]}")
+    # 5. Visualize the results
+    plot_history(training_history, title='XOR Problemi Çözümü')
