@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 # Core Components
 # ---------------------------------------------------------------------------
 
+# --- Activation Functions ---
 class ActivationFunctions:
     """A collection of static methods for activation functions and their derivatives."""
     @staticmethod
@@ -25,13 +26,25 @@ class ActivationFunctions:
         return (x > 0).astype(float)
 
     @staticmethod
+    def leaky_relu(x, alpha=0.01):
+        """
+        Leaky ReLU allows a small, non-zero gradient when the unit is not active.
+        Helps prevent the 'dying ReLU' problem.
+        """
+        return np.where(x > 0, x, x * alpha)
+
+    @staticmethod
+    def leaky_relu_derivative(x, alpha=0.01):
+        """Derivative of the Leaky ReLU function."""
+        return np.where(x > 0, 1.0, alpha)
+
+    @staticmethod
     def linear(x):
         return x
 
     @staticmethod
     def linear_derivative(x):
         return np.ones_like(x)
-
 class Loss:
     """Base class for all loss functions."""
     def loss(self, y_true, y_pred):
@@ -73,25 +86,44 @@ class SGD:
 # Network Architecture
 # ---------------------------------------------------------------------------
 
+# --- Layer Class ---
 class Layer:
     """Represents a single dense layer in the neural network."""
     def __init__(self, input_size, output_size, activation_name="sigmoid"):
         """Initializes the layer's weights, biases, and activation function."""
-        self.weights = np.random.randn(input_size, output_size) * 0.01
+        
+        self.activation_name = activation_name
+
+        # --- NEW: Intelligent Weight Initialization ---
+        # Select the best initialization method based on the activation function.
+        if self.activation_name in ["relu", "leaky_relu"]:
+            # He Initialization is best for the ReLU family.
+            self.weights = np.random.randn(input_size, output_size) * np.sqrt(2.0 / input_size)
+        elif self.activation_name == "sigmoid":
+            # Xavier/Glorot Initialization is best for Sigmoid and Tanh.
+            self.weights = np.random.randn(input_size, output_size) * np.sqrt(1.0 / input_size)
+        else:
+            # A fallback for linear or other activation functions.
+            self.weights = np.random.randn(input_size, output_size) * 0.01
+
         self.bias = np.zeros((1, output_size))
         
-        # Store activation function details
-        self.activation_name = activation_name
+        # Assign the activation functions.
         activations = {
             "sigmoid": (ActivationFunctions.sigmoid, ActivationFunctions.sigmoid_derivative),
             "relu": (ActivationFunctions.relu, ActivationFunctions.relu_derivative),
+            "leaky_relu": (
+                lambda x: ActivationFunctions.leaky_relu(x, alpha=0.01),
+                lambda x: ActivationFunctions.leaky_relu_derivative(x, alpha=0.01)
+            ),
             "linear": (ActivationFunctions.linear, ActivationFunctions.linear_derivative)
         }
-        if activation_name not in activations:
-            raise ValueError(f"Unsupported activation function: {activation_name}")
-        self.activation_func, self.activation_derivative_func = activations[activation_name]
+
+        if self.activation_name not in activations:
+            raise ValueError(f"Unsupported activation function: {self.activation_name}")
+        self.activation_func, self.activation_derivative_func = activations[self.activation_name]
         
-        # Cache for backpropagation
+        # Cache for backpropagation.
         self.input = None
         self.output = None
         self.delta_weights = None
@@ -113,7 +145,7 @@ class Layer:
         self.delta_bias = np.sum(activated_error, axis=0, keepdims=True)
         input_error = np.dot(activated_error, self.weights.T)
         return input_error
-
+    
 class NeuralNetwork:
     """A fully-connected feedforward neural network."""
     def __init__(self):
@@ -214,33 +246,38 @@ class NeuralNetwork:
 
 def plot_history(history, title=''):
     """
-    Plots training & validation metrics (loss & accuracy) on a single graph.
+    Plots training and validation accuracy/loss in two separate subplots.
     """
-    plt.style.use('ggplot')
-    plt.figure(figsize=(12, 8))
+    plt.style.use('fast')
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    
+    fig.suptitle(f'Eğitim Geçmişi: {title}', fontsize=16)
 
-    # Kayıp çizgileri
-    plt.plot(history['loss'], color='blue', linestyle='-', label='Eğitim Kaybı')
-    plt.plot(history['val_loss'], color='red', linestyle='-', label='Validasyon Kaybı')
+    ax1.set_title('Model Doğruluğu')
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Doğruluk')
+    ax1.plot(history['accuracy'], label='Eğitim Doğruluğu')
+    ax1.plot(history['val_accuracy'], label='Validasyon Doğruluğu')
+    ax1.legend()
+    ax1.grid(True)
 
-    # Doğruluk çizgileri
-    plt.plot(history['accuracy'], color='blue', linestyle='--', label='Eğitim Doğruluğu')
-    plt.plot(history['val_accuracy'], color='red', linestyle='--', label='Validasyon Doğruluğu')
-    
-    # Grafik başlıkları ve etiketler
-    plt.title(f'Eğitim Geçmişi: {title}', fontsize=16)
-    plt.xlabel('Epoch')
-    plt.ylabel('Değer (Loss ve Accuracy)')
-    
-    plt.legend()
-    plt.grid(True)
-    plt.ylim(bottom=0)
-    
-    plt.xlim(0, len(history['loss']) - 1)
-    
-    plt.tight_layout()
+    ax2.set_title('Model Kaybı')
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Kayıp')
+    ax2.plot(history['loss'], label='Eğitim Kaybı')
+    ax2.plot(history['val_loss'], label='Validasyon Kaybı')
+    ax2.legend()
+    ax2.grid(True)
+
+    num_epochs = len(history['loss'])
+    for ax in [ax1, ax2]:
+        ax.set_xlim(0, num_epochs - 1)
+        ax.set_ylim(bottom=0)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
-
+    
 # ---------------------------------------------------------------------------
 # Main Execution
 # ---------------------------------------------------------------------------
@@ -253,8 +290,7 @@ if __name__ == "__main__":
 
     # 2. Build the Neural Network
     nn = NeuralNetwork()
-    nn.add_layer(input_size=2, output_size=8, activation_name="relu")
-    nn.add_layer(input_size=8, output_size=8, activation_name="linear")
+    nn.add_layer(input_size=2, output_size=8, activation_name="leaky_relu")
     nn.add_layer(input_size=8, output_size=1, activation_name="sigmoid")
     
     # 3. Compile the model
@@ -264,7 +300,7 @@ if __name__ == "__main__":
     print("Eğitim başlıyor...")
     training_history = nn.train(X_train=X_data, y_train=y_data, 
                                 X_val=X_data, y_val=y_data, 
-                                epochs=3000)
+                                epochs=500)
     print("Eğitim tamamlandı.")
 
     # 5. Visualize the results
