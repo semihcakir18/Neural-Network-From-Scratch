@@ -150,44 +150,63 @@ class NeuralNetwork:
         predicted_labels = np.round(y_pred)
         return np.mean(predicted_labels == y_true)
 
-    def train(self, X_train, y_train, X_val, y_val, epochs, verbose=True):
-        """
-        Trains the neural network for a fixed number of epochs.
-        
-        Returns:
-            A history dictionary containing training and validation loss and accuracy.
-        """
-        if self.optimizer is None or self.loss_func is None:
-            raise ValueError("Network must be compiled with an optimizer and loss function before training.")
-        
-        history = {'loss': [], 'accuracy': [], 'val_loss': [], 'val_accuracy': []}
+# NeuralNetwork sınıfının içinde
 
-        for epoch in range(epochs):
-            # 1. Forward pass on training data
-            train_preds = self.forward(X_train)
+def train(self, X_train, y_train, X_val, y_val, epochs, batch_size=32, verbose=True):
+    """
+    Trains the neural network using mini-batch gradient descent.
+    """
+    if self.optimizer is None or self.loss_func is None:
+        raise ValueError("Network must be compiled before training.")
+    
+    history = {'loss': [], 'accuracy': [], 'val_loss': [], 'val_accuracy': []}
+    
+    num_samples = X_train.shape[0]
+
+    for epoch in range(epochs):
+        # Shuffle the training data at the beginning of each epoch
+        permutation = np.random.permutation(num_samples)
+        X_train_shuffled = X_train[permutation]
+        y_train_shuffled = y_train[permutation]
+
+        epoch_loss = []
+        epoch_acc = []
+
+        # Loop over Mini-batches
+        for i in range(0, num_samples, batch_size):
+            # Get the current mini-batch
+            X_batch = X_train_shuffled[i:i+batch_size]
+            y_batch = y_train_shuffled[i:i+batch_size]
+
+            # 1. Forward pass
+            train_preds = self.forward(X_batch)
             
-            # 2. Backward pass to calculate gradients
-            self.backward(y_train, train_preds)
+            # 2. Backward pass
+            self.backward(y_batch, train_preds)
             
-            # 3. Update weights using the optimizer
+            # 3. Update weights 
             for layer in self.layers:
                 self.optimizer.update(layer)
-
-            # 4. Calculate and store metrics for both training and validation sets
-            history['loss'].append(self.loss_func.loss(y_train, train_preds))
-            history['accuracy'].append(self.calculate_accuracy(train_preds, y_train))
             
-            val_preds = self.forward(X_val)
-            history['val_loss'].append(self.loss_func.loss(y_val, val_preds))
-            history['val_accuracy'].append(self.calculate_accuracy(val_preds, y_val))
+            # Record metrics for this batch
+            epoch_loss.append(self.loss_func.loss(y_batch, train_preds))
+            epoch_acc.append(self.calculate_accuracy(train_preds, y_batch))
 
-            # 5. Print progress
-            if verbose and epoch % (epochs // 10) == 0:
-                print(f"Epoch {epoch}/{epochs} -> "
-                      f"Loss: {history['loss'][-1]:.4f}, Acc: {history['accuracy'][-1]:.4f} | "
-                      f"Val_Loss: {history['val_loss'][-1]:.4f}, Val_Acc: {history['val_accuracy'][-1]:.4f}")
+        # Calculate average metrics for the epoch
+        history['loss'].append(np.mean(epoch_loss))
+        history['accuracy'].append(np.mean(epoch_acc))
         
-        return history
+        # Calculate validation metrics 
+        val_preds = self.forward(X_val)
+        history['val_loss'].append(self.loss_func.loss(y_val, val_preds))
+        history['val_accuracy'].append(self.calculate_accuracy(val_preds, y_val))
+
+        if verbose and epoch % (epochs // 10 or 1) == 0:
+            print(f"Epoch {epoch}/{epochs} -> "
+                  f"Loss: {history['loss'][-1]:.4f}, Acc: {history['accuracy'][-1]:.4f} | "
+                  f"Val_Loss: {history['val_loss'][-1]:.4f}, Val_Acc: {history['val_accuracy'][-1]:.4f}")
+    
+    return history
 
 # ---------------------------------------------------------------------------
 # Visualization
