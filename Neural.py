@@ -210,7 +210,11 @@ class Layer:
         self.delta_weights = None
         self.delta_bias = None
 
-    def forward(self, input_data):
+    def forward(self, input_data, training=True):
+        """
+        Performs the forward pass through the layer.
+        The 'training' argument is accepted for API consistency but not used here.
+        """
         self.input = input_data
         self.output = np.dot(input_data, self.weights) + self.bias
         return self.activation_func(self.output)
@@ -221,6 +225,48 @@ class Layer:
         self.delta_bias = np.sum(activated_error, axis=0, keepdims=True)
         input_error = np.dot(activated_error, self.weights.T)
         return input_error
+
+
+# --- Dropout Layer Class ---
+class DropoutLayer:
+    """
+    A layer that applies Dropout regularization to prevent overfitting.
+    This layer has no trainable parameters.
+    """
+
+    def __init__(self, rate):
+        """
+        Initializes the Dropout layer.
+        Args:
+            rate (float): The fraction of neurons to drop (e.g., 0.5 for 50%).
+        """
+        self.rate = rate  # The probability of dropping a neuron
+        self.mask = None  # Will store the dropout mask for backpropagation
+
+    def forward(self, input_data, training=True):
+        """
+        Performs the forward pass for the Dropout layer.
+        """
+        if not training:
+            # During prediction/validation, do nothing.
+            return input_data
+
+        # During training, apply dropout.
+        # 1. Create a binary mask where 1s indicate neurons to keep.
+        # 2. Scale the mask by (1.0 - self.rate) -> this is "inverted dropout".
+        self.mask = np.random.binomial(1, 1.0 - self.rate, size=input_data.shape) / (
+            1.0 - self.rate
+        )
+
+        # Apply the mask to the input.
+        return input_data * self.mask
+
+    def backward(self, output_error):
+        """
+        Performs the backward pass for the Dropout layer.
+        The gradient is simply passed through the same mask.
+        """
+        return output_error * self.mask
 
 
 class NeuralNetwork:
@@ -241,13 +287,6 @@ class NeuralNetwork:
         self.optimizer = optimizer
         self.loss_func = loss
 
-    def forward(self, input_data):
-        """Propagates input data through all layers."""
-        output = input_data
-        for layer in self.layers:
-            output = layer.forward(output)
-        return output
-
     def backward(self, y_true, y_pred):
         """Initiates the backpropagation process starting from the loss derivative."""
         error = self.loss_func.derivative(y_true, y_pred)
@@ -260,45 +299,59 @@ class NeuralNetwork:
         predicted_labels = np.round(y_pred)
         return np.mean(predicted_labels == y_true)
 
+    def add_dropout_layer(self, rate):
+        """A helper method to add a dropout layer for clarity."""
+        self.layers.append(DropoutLayer(rate))
+
+    # --- UPDATED forward method ---
+    def forward(self, input_data, training=True):
+        """
+        Propagates input data through all layers.
+        The 'training' flag is crucial for layers like Dropout.
+        """
+        output = input_data
+        for layer in self.layers:
+            # Pass the training flag to the layer's forward method
+            output = layer.forward(output, training=training)
+        return output
+
+    # --- UPDATED train method ---
     def train(
         self, X_train, y_train, X_val, y_val, epochs, batch_size=32, verbose=True
     ):
-        """
-        Trains the neural network using mini-batch gradient descent.
-        """
+        """Trains the neural network using mini-batch gradient descent."""
         if self.optimizer is None or self.loss_func is None:
             raise ValueError("Network must be compiled before training.")
 
         history = {"loss": [], "accuracy": [], "val_loss": [], "val_accuracy": []}
-
         num_samples = X_train.shape[0]
 
         for epoch in range(epochs):
-            # Shuffle the training data at the beginning of each epoch
             permutation = np.random.permutation(num_samples)
-            X_train_shuffled = X_train[permutation]
-            y_train_shuffled = y_train[permutation]
+            X_train_shuffled, y_train_shuffled = (
+                X_train[permutation],
+                y_train[permutation],
+            )
 
-            epoch_loss = []
-            epoch_acc = []
+            epoch_loss, epoch_acc = [], []
 
-            # Loop over Mini-batches
             for i in range(0, num_samples, batch_size):
-                # Get the current mini-batch
-                X_batch = X_train_shuffled[i : i + batch_size]
-                y_batch = y_train_shuffled[i : i + batch_size]
+                X_batch, y_batch = (
+                    X_train_shuffled[i : i + batch_size],
+                    y_train_shuffled[i : i + batch_size],
+                )
 
-                # 1. Forward pass
-                train_preds = self.forward(X_batch)
+                # 1. Forward pass in TRAINING mode
+                train_preds = self.forward(X_batch, training=True)
 
                 # 2. Backward pass
                 self.backward(y_batch, train_preds)
 
-                # 3. Update weights
+                # 3. Update weights (only for layers that have them)
                 for layer in self.layers:
-                    self.optimizer.update(layer)
+                    if hasattr(layer, "weights"):  # Check if the layer is trainable
+                        self.optimizer.update(layer)
 
-                # Record metrics for this batch
                 epoch_loss.append(self.loss_func.loss(y_batch, train_preds))
                 epoch_acc.append(self.calculate_accuracy(train_preds, y_batch))
 
@@ -306,8 +359,8 @@ class NeuralNetwork:
             history["loss"].append(np.mean(epoch_loss))
             history["accuracy"].append(np.mean(epoch_acc))
 
-            # Calculate validation metrics
-            val_preds = self.forward(X_val)
+            # 4. Forward pass on validation data in PREDICTION mode
+            val_preds = self.forward(X_val, training=False)
             history["val_loss"].append(self.loss_func.loss(y_val, val_preds))
             history["val_accuracy"].append(self.calculate_accuracy(val_preds, y_val))
 
@@ -367,14 +420,14 @@ def plot_history(history, title=""):
 
 if __name__ == "__main__":
     # 1. Prepare the dataset (XOR Problem)
-    # For this simple problem, we use the same data for training and validation.
     X_data = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
     y_data = np.array([[0], [1], [1], [0]])
 
-    # 2. Build the Neural Network
+    # 2. Build the Neural Network with Dropout
     nn = NeuralNetwork()
-    nn.add_layer(input_size=2, output_size=8, activation_name="leaky_relu")
-    nn.add_layer(input_size=8, output_size=1, activation_name="sigmoid")
+    nn.add_layer(input_size=2, output_size=16, activation_name="relu")
+    nn.add_dropout_layer(rate=0.1)
+    nn.add_layer(input_size=16, output_size=1, activation_name="sigmoid")
 
     # 3. Compile the model
     nn.compile(optimizer=Adam(learning_rate=0.001), loss=BinaryCrossEntropy())
@@ -382,9 +435,14 @@ if __name__ == "__main__":
     # 4. Train the model
     print("Eğitim başlıyor...")
     training_history = nn.train(
-        X_train=X_data, y_train=y_data, X_val=X_data, y_val=y_data, epochs=500
-    )
+        X_train=X_data,
+        y_train=y_data,
+        X_val=X_data,
+        y_val=y_data,
+        epochs=2000,
+        batch_size=4,
+    )  # Using batch_size for mini-batch demo
     print("Eğitim tamamlandı.")
 
     # 5. Visualize the results
-    plot_history(training_history, title="XOR Problemi Çözümü")
+    plot_history(training_history, title="XOR with Dropout")
