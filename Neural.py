@@ -373,6 +373,44 @@ class NeuralNetwork:
 
         return history
 
+    def save(self, path):
+        """Saves the model's parameters (weights and biases) to a file."""
+
+        # Sadece eğitilebilir katmanların parametrelerini sakla
+        params_to_save = {}
+        for i, layer in enumerate(self.layers):
+            if hasattr(layer, "weights"):
+                params_to_save[f"layer_{i}_weights"] = layer.weights
+                params_to_save[f"layer_{i}_bias"] = layer.bias
+
+        # NumPy'nin savez fonksiyonu ile sözlüğü sıkıştırılmış bir dosyaya kaydet
+        np.savez(path, **params_to_save)
+        print(f"Model successfully saved to {path}")
+
+    def load(self, path):
+        """Loads the model's parameters from a file."""
+
+        try:
+            # Kaydedilmiş .npz dosyasını yükle
+            loaded_params = np.load(path)
+
+            # Parametreleri ilgili katmanlara geri ata
+            for i, layer in enumerate(self.layers):
+                if hasattr(layer, "weights"):
+                    weight_key = f"layer_{i}_weights"
+                    bias_key = f"layer_{i}_bias"
+
+                    if weight_key in loaded_params and bias_key in loaded_params:
+                        layer.weights = loaded_params[weight_key]
+                        layer.bias = loaded_params[bias_key]
+                    else:
+                        print(f"Warning: Parameters for layer {i} not found in file.")
+
+            print(f"Model successfully loaded from {path}")
+
+        except FileNotFoundError:
+            print(f"Error: No model file found at {path}")
+
 
 # ---------------------------------------------------------------------------
 # Visualization
@@ -419,30 +457,51 @@ def plot_history(history, title=""):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # 1. Prepare the dataset (XOR Problem)
+    # --- Veri Hazırlığı ---
     X_data = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
     y_data = np.array([[0], [1], [1], [0]])
+    model_path = "xor_model.npz"
 
-    # 2. Build the Neural Network with Dropout
-    nn = NeuralNetwork()
-    nn.add_layer(input_size=2, output_size=16, activation_name="relu")
-    nn.add_dropout_layer(rate=0.1)
-    nn.add_layer(input_size=16, output_size=1, activation_name="sigmoid")
+    # --- 1. Model Oluşturma ve Eğitim ---
+    print("--- Training a new model ---")
+    nn_train = NeuralNetwork()
+    nn_train.add_layer(input_size=2, output_size=8, activation_name="relu")
+    nn_train.add_dropout_layer(rate=0.2)
+    nn_train.add_layer(input_size=8, output_size=1, activation_name="sigmoid")
+    nn_train.compile(optimizer=Adam(learning_rate=0.01), loss=BinaryCrossEntropy())
 
-    # 3. Compile the model
-    nn.compile(optimizer=Adam(learning_rate=0.001), loss=BinaryCrossEntropy())
+    training_history = nn_train.train(
+        X_data, y_data, X_data, y_data, epochs=1000, batch_size=4, verbose=False
+    )
+    print("Training complete.")
 
-    # 4. Train the model
-    print("Eğitim başlıyor...")
-    training_history = nn.train(
-        X_train=X_data,
-        y_train=y_data,
-        X_val=X_data,
-        y_val=y_data,
-        epochs=2000,
-        batch_size=4,
-    )  # Using batch_size for mini-batch demo
-    print("Eğitim tamamlandı.")
+    # --- 2. Modeli Kaydetme ---
+    nn_train.save(model_path)
 
-    # 5. Visualize the results
+    # --- 3. Yeni, Eğitilmemiş Bir Model Oluşturma ---
+    print("\n--- Creating a new, untrained model ---")
+    nn_load = NeuralNetwork()
+    nn_load.add_layer(input_size=2, output_size=8, activation_name="relu")
+    nn_load.add_dropout_layer(rate=0.2)
+    nn_load.add_layer(input_size=8, output_size=1, activation_name="sigmoid")
+    nn_load.compile(optimizer=Adam(learning_rate=0.01), loss=BinaryCrossEntropy())
+
+    # --- 4. Kaydedilmiş Ağırlıkları Yükleme ---
+    nn_load.load(model_path)
+
+    # --- 5. Sonuçları Karşılaştırma ---
+    print("\n--- Comparing predictions ---")
+    # Tüm veri seti için tahmin yapalım
+    predictions_trained = nn_train.forward(X_data, training=False)
+    predictions_loaded = nn_load.forward(X_data, training=False)
+
+    print("Original trained model predictions:\n", np.round(predictions_trained).T)
+    print("Loaded model predictions:\n", np.round(predictions_loaded).T)
+
+    if np.array_equal(np.round(predictions_trained), np.round(predictions_loaded)):
+        print("\nSuccess: Loaded model gives the same predictions!")
+    else:
+        print("\nFailure: Predictions do not match.")
+
+    # 6. Visualize the results
     plot_history(training_history, title="XOR with Dropout")
